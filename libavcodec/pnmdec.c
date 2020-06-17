@@ -43,9 +43,10 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
     int buf_size         = avpkt->size;
     PNMContext * const s = avctx->priv_data;
     AVFrame * const p    = data;
-    int i, j, n, linesize, h, upgrade = 0, is_mono = 0;
+    int i, j, k, n, linesize, h, upgrade = 0, is_mono = 0;
     unsigned char *ptr;
     int components, sample_len, ret;
+    float scale;
 
     s->bytestream_start =
     s->bytestream       = (uint8_t *)buf;
@@ -124,7 +125,7 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
     do_read:
         ptr      = p->data[0];
         linesize = p->linesize[0];
-        if (s->bytestream + n * avctx->height > s->bytestream_end)
+        if (n * avctx->height > s->bytestream_end - s->bytestream)
             return AVERROR_INVALIDDATA;
         if(s->type < 4 || (is_mono && s->type==7)){
             for (i=0; i<avctx->height; i++) {
@@ -132,7 +133,7 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
                 init_put_bits(&pb, ptr, linesize);
                 for(j=0; j<avctx->width * components; j++){
                     unsigned int c=0;
-                    int v=0;
+                    unsigned v=0;
                     if(s->type < 4)
                     while(s->bytestream < s->bytestream_end && (*s->bytestream < '0' || *s->bytestream > '9' ))
                         s->bytestream++;
@@ -143,10 +144,14 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
                         v = (*s->bytestream++)&1;
                     } else {
                         /* read a sequence of digits */
-                        do {
+                        for (k = 0; k < 6 && c <= 9; k += 1) {
                             v = 10*v + c;
                             c = (*s->bytestream++) - '0';
-                        } while (c <= 9);
+                        }
+                        if (v > s->maxval) {
+                            av_log(avctx, AV_LOG_ERROR, "value %d larger than maxval %d\n", v, s->maxval);
+                            return AVERROR_INVALIDDATA;
+                        }
                     }
                     if (sample_len == 16) {
                         ((uint16_t*)ptr)[j] = (((1<<sample_len)-1)*v + (s->maxval>>1))/s->maxval;
@@ -188,7 +193,7 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
             linesize = p->linesize[0];
             if (s->maxval >= 256)
                 n *= 2;
-            if (s->bytestream + n * avctx->height * 3 / 2 > s->bytestream_end)
+            if (n * avctx->height * 3 / 2 > s->bytestream_end - s->bytestream)
                 return AVERROR_INVALIDDATA;
             for (i = 0; i < avctx->height; i++) {
                 samplecpy(ptr, s->bytestream, n, s->maxval);
@@ -218,7 +223,7 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
             n        = avctx->width * 2;
             ptr      = p->data[0];
             linesize = p->linesize[0];
-            if (s->bytestream + n * avctx->height * 3 / 2 > s->bytestream_end)
+            if (n * avctx->height * 3 / 2 > s->bytestream_end - s->bytestream)
                 return AVERROR_INVALIDDATA;
             for (i = 0; i < avctx->height; i++) {
                 for (j = 0; j < n / 2; j++) {
@@ -247,6 +252,48 @@ static int pnm_decode_frame(AVCodecContext *avctx, void *data,
 
                 ptr1 += p->linesize[1] / 2;
                 ptr2 += p->linesize[2] / 2;
+            }
+        }
+        break;
+    case AV_PIX_FMT_GBRPF32:
+        if (avctx->width * avctx->height * 12 > s->bytestream_end - s->bytestream)
+            return AVERROR_INVALIDDATA;
+        scale = 1.f / s->scale;
+        if (s->endian) {
+            float *r, *g, *b;
+
+            r = (float *)p->data[2];
+            g = (float *)p->data[0];
+            b = (float *)p->data[1];
+            for (int i = 0; i < avctx->height; i++) {
+                for (int j = 0; j < avctx->width; j++) {
+                    r[j] = av_int2float(av_le2ne32(((uint32_t *)s->bytestream)[0])) * scale;
+                    g[j] = av_int2float(av_le2ne32(((uint32_t *)s->bytestream)[4])) * scale;
+                    b[j] = av_int2float(av_le2ne32(((uint32_t *)s->bytestream)[8])) * scale;
+                    s->bytestream += 12;
+                }
+
+                r += p->linesize[2] / 4;
+                g += p->linesize[0] / 4;
+                b += p->linesize[1] / 4;
+            }
+        } else {
+            float *r, *g, *b;
+
+            r = (float *)p->data[2];
+            g = (float *)p->data[0];
+            b = (float *)p->data[1];
+            for (int i = 0; i < avctx->height; i++) {
+                for (int j = 0; j < avctx->width; j++) {
+                    r[j] = av_int2float(av_be2ne32(((uint32_t *)s->bytestream)[0])) * scale;
+                    g[j] = av_int2float(av_be2ne32(((uint32_t *)s->bytestream)[4])) * scale;
+                    b[j] = av_int2float(av_be2ne32(((uint32_t *)s->bytestream)[8])) * scale;
+                    s->bytestream += 12;
+                }
+
+                r += p->linesize[2] / 4;
+                g += p->linesize[0] / 4;
+                b += p->linesize[1] / 4;
             }
         }
         break;
@@ -311,6 +358,18 @@ AVCodec ff_pam_decoder = {
     .long_name      = NULL_IF_CONFIG_SMALL("PAM (Portable AnyMap) image"),
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_PAM,
+    .priv_data_size = sizeof(PNMContext),
+    .decode         = pnm_decode_frame,
+    .capabilities   = AV_CODEC_CAP_DR1,
+};
+#endif
+
+#if CONFIG_PFM_DECODER
+AVCodec ff_pfm_decoder = {
+    .name           = "pfm",
+    .long_name      = NULL_IF_CONFIG_SMALL("PFM (Portable FloatMap) image"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_PFM,
     .priv_data_size = sizeof(PNMContext),
     .decode         = pnm_decode_frame,
     .capabilities   = AV_CODEC_CAP_DR1,

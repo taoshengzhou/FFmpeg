@@ -31,6 +31,7 @@ static av_cold int y41p_encode_init(AVCodecContext *avctx)
     }
 
     avctx->bits_per_coded_sample = 12;
+    avctx->bit_rate = ff_guess_coded_bitrate(avctx);
 
     return 0;
 }
@@ -89,5 +90,4 @@ AVCodec ff_y41p_encoder = {
     .close        = y41p_encode_close,
     .pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV411P,
                                                  AV_PIX_FMT_NONE },
-    .capabilities = AV_CODEC_CAP_INTRA_ONLY,
 };

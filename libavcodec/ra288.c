@@ -1,6 +1,6 @@
 /*
  * RealAudio 2.0 (28.8K)
- * Copyright (c) 2003 The FFmpeg Project
+ * Copyright (c) 2003 The FFmpeg project
  *
  * This file is part of FFmpeg.
  *
@@ -22,13 +22,14 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/float_dsp.h"
 #include "libavutil/internal.h"
-#include "avcodec.h"
-#include "internal.h"
+
 #define BITSTREAM_READER_LE
-#include "get_bits.h"
-#include "ra288.h"
-#include "lpc.h"
+#include "avcodec.h"
 #include "celp_filters.h"
+#include "get_bits.h"
+#include "internal.h"
+#include "lpc.h"
+#include "ra288.h"
 
 #define MAX_BACKWARD_FILTER_ORDER  36
 #define MAX_BACKWARD_FILTER_LEN    40
@@ -76,7 +77,7 @@ static av_cold int ra288_decode_init(AVCodecContext *avctx)
     avctx->channel_layout = AV_CH_LAYOUT_MONO;
     avctx->sample_fmt     = AV_SAMPLE_FMT_FLT;
 
-    if (avctx->block_align <= 0) {
+    if (avctx->block_align != 38) {
         av_log(avctx, AV_LOG_ERROR, "unsupported block align\n");
         return AVERROR_PATCHWELCOME;
     }

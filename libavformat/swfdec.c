@@ -61,7 +61,7 @@ static int get_swf_tag(AVIOContext *pb, int *len_ptr)
 }
 
 
-static int swf_probe(AVProbeData *p)
+static int swf_probe(const AVProbeData *p)
 {
     GetBitContext gb;
     int len, xmin, xmax, ymin, ymax;
@@ -95,7 +95,7 @@ static int swf_probe(AVProbeData *p)
     if (p->buf[3] >= 20 || xmax < 16 || ymax < 16)
         return AVPROBE_SCORE_MAX / 4;
 
-    return AVPROBE_SCORE_MAX;
+    return AVPROBE_SCORE_EXTENSION + 1;
 }
 
 #if CONFIG_ZLIB
@@ -119,10 +119,10 @@ retry:
     z->avail_out = buf_size;
 
     ret = inflate(z, Z_NO_FLUSH);
-    if (ret < 0)
-        return AVERROR(EINVAL);
     if (ret == Z_STREAM_END)
         return AVERROR_EOF;
+    if (ret != Z_OK)
+        return AVERROR(EINVAL);
 
     if (buf_size - z->avail_out == 0)
         goto retry;
@@ -152,6 +152,8 @@ static int swf_read_header(AVFormatContext *s)
         swf->zpb->seekable = 0;
         if (inflateInit(&swf->zstream) != Z_OK) {
             av_log(s, AV_LOG_ERROR, "Unable to init zlib context\n");
+            av_freep(&swf->zbuf_in);
+            av_freep(&swf->zbuf_out);
             return AVERROR(EINVAL);
         }
         pb = swf->zpb;
@@ -395,6 +397,11 @@ static int swf_read_packet(AVFormatContext *s, AVPacket *pkt)
             pkt->pos = pos;
             pkt->stream_index = st->index;
 
+            if (linesize * height > pkt->size) {
+                res = AVERROR_INVALIDDATA;
+                goto bitmap_end;
+            }
+
             switch (bmp_fmt) {
             case 3:
                 pix_fmt = AV_PIX_FMT_PAL8;
@@ -422,10 +429,6 @@ static int swf_read_packet(AVFormatContext *s, AVPacket *pkt)
             } else
                 st->codecpar->format = pix_fmt;
 
-            if (linesize * height > pkt->size) {
-                res = AVERROR_INVALIDDATA;
-                goto bitmap_end;
-            }
             memcpy(pkt->data, buf + colormapsize*colormapbpp, linesize * height);
 
             res = pkt->size;
@@ -485,7 +488,6 @@ bitmap_end_skip:
             if ((res = av_new_packet(pkt, len)) < 0)
                 return res;
             if (avio_read(pb, pkt->data, 4) != 4) {
-                av_packet_unref(pkt);
                 return AVERROR_INVALIDDATA;
             }
             if (AV_RB32(pkt->data) == 0xffd8ffd9 ||
@@ -502,7 +504,6 @@ bitmap_end_skip:
             }
             if (res != pkt->size) {
                 if (res < 0) {
-                    av_packet_unref(pkt);
                     return res;
                 }
                 av_shrink_packet(pkt, res);
@@ -516,7 +517,7 @@ bitmap_end_skip:
         }
     skip:
         if(len<0)
-            av_log(s, AV_LOG_WARNING, "Cliping len %d\n", len);
+            av_log(s, AV_LOG_WARNING, "Clipping len %d\n", len);
         len = FFMAX(0, len);
         avio_skip(pb, len);
     }
@@ -529,7 +530,7 @@ static av_cold int swf_read_close(AVFormatContext *avctx)
     inflateEnd(&s->zstream);
     av_freep(&s->zbuf_in);
     av_freep(&s->zbuf_out);
-    av_freep(&s->zpb);
+    avio_context_free(&s->zpb);
     return 0;
 }
 #endif

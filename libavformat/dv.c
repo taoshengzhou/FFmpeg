@@ -110,11 +110,11 @@ static const int dv_audio_frequency[3] = {
 
 /*
  * There's a couple of assumptions being made here:
- * 1. By default we silence erroneous (0x8000/16bit 0x800/12bit) audio samples.
+ * 1. By default we silence erroneous (0x8000/16-bit 0x800/12-bit) audio samples.
  *    We can pass them upwards when libavcodec will be ready to deal with them.
  * 2. We don't do software emphasis.
- * 3. Audio is always returned as 16bit linear samples: 12bit nonlinear samples
- *    are converted into 16bit linear ones.
+ * 3. Audio is always returned as 16-bit linear samples: 12-bit nonlinear samples
+ *    are converted into 16-bit linear ones.
  */
 static int dv_extract_audio(const uint8_t *frame, uint8_t **ppcm,
                             const AVDVProfile *sys)
@@ -130,7 +130,7 @@ static int dv_extract_audio(const uint8_t *frame, uint8_t **ppcm,
 
     smpls = as_pack[1]      & 0x3f; /* samples in this frame - min. samples */
     freq  = as_pack[4] >> 3 & 0x07; /* 0 - 48kHz, 1 - 44,1kHz, 2 - 32kHz */
-    quant = as_pack[4]      & 0x07; /* 0 - 16bit linear, 1 - 12bit nonlinear */
+    quant = as_pack[4]      & 0x07; /* 0 - 16-bit linear, 1 - 12-bit nonlinear */
 
     if (quant > 1)
         return -1;  /* unsupported quantization */
@@ -161,7 +161,7 @@ static int dv_extract_audio(const uint8_t *frame, uint8_t **ppcm,
         for (i = 0; i < sys->difseg_size; i++) {
             frame += 6 * 80; /* skip DIF segment header */
             if (quant == 1 && i == half_ch) {
-                /* next stereo channel (12bit mode only) */
+                /* next stereo channel (12-bit mode only) */
                 av_assert0(ipcm<4);
                 pcm = ppcm[ipcm++];
                 if (!pcm)
@@ -171,7 +171,7 @@ static int dv_extract_audio(const uint8_t *frame, uint8_t **ppcm,
             /* for each AV sequence */
             for (j = 0; j < 9; j++) {
                 for (d = 8; d < 80; d += 2) {
-                    if (quant == 0) {  /* 16bit quantization */
+                    if (quant == 0) {  /* 16-bit quantization */
                         of = sys->audio_shuffle[i][j] +
                              (d - 8) / 2 * sys->audio_stride;
                         if (of * 2 >= size)
@@ -184,7 +184,7 @@ static int dv_extract_audio(const uint8_t *frame, uint8_t **ppcm,
 
                         if (pcm[of * 2 + 1] == 0x80 && pcm[of * 2] == 0x00)
                             pcm[of * 2 + 1] = 0;
-                    } else {           /* 12bit quantization */
+                    } else {           /* 12-bit quantization */
                         lc = ((uint16_t)frame[d]     << 4) |
                              ((uint16_t)frame[d + 2] >> 4);
                         rc = ((uint16_t)frame[d + 1] << 4) |
@@ -233,7 +233,7 @@ static int dv_extract_audio_info(DVDemuxContext *c, const uint8_t *frame)
     smpls = as_pack[1]      & 0x3f; /* samples in this frame - min. samples */
     freq  = as_pack[4] >> 3 & 0x07; /* 0 - 48kHz, 1 - 44,1kHz, 2 - 32kHz */
     stype = as_pack[3]      & 0x1f; /* 0 - 2CH, 2 - 4CH, 3 - 8CH */
-    quant = as_pack[4]      & 0x07; /* 0 - 16bit linear, 1 - 12bit nonlinear */
+    quant = as_pack[4]      & 0x07; /* 0 - 16-bit linear, 1 - 12-bit nonlinear */
 
     if (freq >= FF_ARRAY_ELEMS(dv_audio_frequency)) {
         av_log(c->fctx, AV_LOG_ERROR,
@@ -495,16 +495,18 @@ static int dv_read_header(AVFormatContext *s)
 {
     unsigned state, marker_pos = 0;
     RawDVContext *c = s->priv_data;
+    int ret;
 
     c->dv_demux = avpriv_dv_init_demux(s);
     if (!c->dv_demux)
-        return -1;
+        return AVERROR(ENOMEM);
 
     state = avio_rb32(s->pb);
     while ((state & 0xffffff7f) != 0x1f07003f) {
         if (avio_feof(s->pb)) {
             av_log(s, AV_LOG_ERROR, "Cannot find DV header.\n");
-            return -1;
+            ret = AVERROR_INVALIDDATA;
+            goto fail;
         }
         if (state == 0x003f0700 || state == 0xff3f0700)
             marker_pos = avio_tell(s->pb);
@@ -518,8 +520,10 @@ static int dv_read_header(AVFormatContext *s)
     AV_WB32(c->buf, state);
 
     if (avio_read(s->pb, c->buf + 4, DV_PROFILE_BYTES - 4) != DV_PROFILE_BYTES - 4 ||
-        avio_seek(s->pb, -DV_PROFILE_BYTES, SEEK_CUR) < 0)
-        return AVERROR(EIO);
+        avio_seek(s->pb, -DV_PROFILE_BYTES, SEEK_CUR) < 0) {
+        ret = AVERROR(EIO);
+        goto fail;
+    }
 
     c->dv_demux->sys = av_dv_frame_profile(c->dv_demux->sys,
                                            c->buf,
@@ -527,17 +531,23 @@ static int dv_read_header(AVFormatContext *s)
     if (!c->dv_demux->sys) {
         av_log(s, AV_LOG_ERROR,
                "Can't determine profile of DV input stream.\n");
-        return -1;
+        ret = AVERROR_INVALIDDATA;
+        goto fail;
     }
 
     s->bit_rate = av_rescale_q(c->dv_demux->sys->frame_size,
                                (AVRational) { 8, 1 },
                                c->dv_demux->sys->time_base);
 
-    if (s->pb->seekable)
+    if (s->pb->seekable & AVIO_SEEKABLE_NORMAL)
         dv_read_timecode(s);
 
     return 0;
+
+fail:
+    av_freep(&c->dv_demux);
+
+    return ret;
 }
 
 static int dv_read_packet(AVFormatContext *s, AVPacket *pkt)
@@ -587,7 +597,7 @@ static int dv_read_close(AVFormatContext *s)
     return 0;
 }
 
-static int dv_probe(AVProbeData *p)
+static int dv_probe(const AVProbeData *p)
 {
     unsigned marker_pos = 0;
     int i;

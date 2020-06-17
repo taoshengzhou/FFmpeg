@@ -25,7 +25,9 @@
 
 #include "avcodec.h"
 #include "internal.h"
-#include "h264.h"
+#include "h264dec.h"
+#include "h264_ps.h"
+#include "hwconfig.h"
 #include "mpegutils.h"
 #include "vdpau.h"
 #include "vdpau_internal.h"
@@ -239,8 +241,8 @@ static int vdpau_h264_init(AVCodecContext *avctx)
         break;
 #endif
     case FF_PROFILE_H264_HIGH_10:
-        /* XXX: High 10 can be treated as High so long as only 8-bits per
-         * formats are supported. */
+        /* XXX: High 10 can be treated as High so long as only 8 bits per
+         * format are supported. */
         profile = VDP_DECODER_PROFILE_H264_HIGH;
         break;
 #ifdef VDP_DECODER_PROFILE_H264_HIGH_444_PREDICTIVE
@@ -260,7 +262,7 @@ static int vdpau_h264_init(AVCodecContext *avctx)
     return ff_vdpau_common_init(avctx, profile, level);
 }
 
-AVHWAccel ff_h264_vdpau_hwaccel = {
+const AVHWAccel ff_h264_vdpau_hwaccel = {
     .name           = "h264_vdpau",
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_H264,
@@ -271,5 +273,7 @@ AVHWAccel ff_h264_vdpau_hwaccel = {
     .frame_priv_data_size = sizeof(struct vdpau_picture_context),
     .init           = vdpau_h264_init,
     .uninit         = ff_vdpau_common_uninit,
+    .frame_params   = ff_vdpau_common_frame_params,
     .priv_data_size = sizeof(VDPAUContext),
+    .caps_internal  = HWACCEL_CAP_ASYNC_SAFE,
 };

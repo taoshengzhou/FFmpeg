@@ -27,10 +27,12 @@
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
 #include "libavutil/mastering_display_metadata.h"
+#include "libavutil/dovi_meta.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
 #include "libavutil/avstring.h"
 #include "libavutil/replaygain.h"
+#include "libavutil/spherical.h"
 #include "libavutil/stereo3d.h"
 
 #include "avformat.h"
@@ -209,7 +211,7 @@ static void dump_paramchange(void *ctx, AVPacketSideData *sd)
 
     return;
 fail:
-    av_log(ctx, AV_LOG_INFO, "unknown param");
+    av_log(ctx, AV_LOG_ERROR, "unknown param");
 }
 
 /* replaygain side data*/
@@ -238,7 +240,7 @@ static void dump_replaygain(void *ctx, AVPacketSideData *sd)
     AVReplayGain *rg;
 
     if (sd->size < sizeof(*rg)) {
-        av_log(ctx, AV_LOG_INFO, "invalid data");
+        av_log(ctx, AV_LOG_ERROR, "invalid data");
         return;
     }
     rg = (AVReplayGain*)sd->data;
@@ -254,41 +256,13 @@ static void dump_stereo3d(void *ctx, AVPacketSideData *sd)
     AVStereo3D *stereo;
 
     if (sd->size < sizeof(*stereo)) {
-        av_log(ctx, AV_LOG_INFO, "invalid data");
+        av_log(ctx, AV_LOG_ERROR, "invalid data");
         return;
     }
 
     stereo = (AVStereo3D *)sd->data;
 
-    switch (stereo->type) {
-    case AV_STEREO3D_2D:
-        av_log(ctx, AV_LOG_INFO, "2D");
-        break;
-    case AV_STEREO3D_SIDEBYSIDE:
-        av_log(ctx, AV_LOG_INFO, "side by side");
-        break;
-    case AV_STEREO3D_TOPBOTTOM:
-        av_log(ctx, AV_LOG_INFO, "top and bottom");
-        break;
-    case AV_STEREO3D_FRAMESEQUENCE:
-        av_log(ctx, AV_LOG_INFO, "frame alternate");
-        break;
-    case AV_STEREO3D_CHECKERBOARD:
-        av_log(ctx, AV_LOG_INFO, "checkerboard");
-        break;
-    case AV_STEREO3D_LINES:
-        av_log(ctx, AV_LOG_INFO, "interleaved lines");
-        break;
-    case AV_STEREO3D_COLUMNS:
-        av_log(ctx, AV_LOG_INFO, "interleaved columns");
-        break;
-    case AV_STEREO3D_SIDEBYSIDE_QUINCUNX:
-        av_log(ctx, AV_LOG_INFO, "side by side (quincunx subsampling)");
-        break;
-    default:
-        av_log(ctx, AV_LOG_WARNING, "unknown");
-        break;
-    }
+    av_log(ctx, AV_LOG_INFO, "%s", av_stereo3d_type_name(stereo->type));
 
     if (stereo->flags & AV_STEREO3D_FLAG_INVERT)
         av_log(ctx, AV_LOG_INFO, " (inverted)");
@@ -299,7 +273,7 @@ static void dump_audioservicetype(void *ctx, AVPacketSideData *sd)
     enum AVAudioServiceType *ast = (enum AVAudioServiceType *)sd->data;
 
     if (sd->size < sizeof(*ast)) {
-        av_log(ctx, AV_LOG_INFO, "invalid data");
+        av_log(ctx, AV_LOG_ERROR, "invalid data");
         return;
     }
 
@@ -320,7 +294,7 @@ static void dump_audioservicetype(void *ctx, AVPacketSideData *sd)
         av_log(ctx, AV_LOG_INFO, "dialogue");
         break;
     case AV_AUDIO_SERVICE_TYPE_COMMENTARY:
-        av_log(ctx, AV_LOG_INFO, "comentary");
+        av_log(ctx, AV_LOG_INFO, "commentary");
         break;
     case AV_AUDIO_SERVICE_TYPE_EMERGENCY:
         av_log(ctx, AV_LOG_INFO, "emergency");
@@ -342,15 +316,22 @@ static void dump_cpb(void *ctx, AVPacketSideData *sd)
     AVCPBProperties *cpb = (AVCPBProperties *)sd->data;
 
     if (sd->size < sizeof(*cpb)) {
-        av_log(ctx, AV_LOG_INFO, "invalid data");
+        av_log(ctx, AV_LOG_ERROR, "invalid data");
         return;
     }
 
     av_log(ctx, AV_LOG_INFO,
-           "bitrate max/min/avg: %d/%d/%d buffer size: %d vbv_delay: %"PRId64,
+#if FF_API_UNSANITIZED_BITRATES
+           "bitrate max/min/avg: %d/%d/%d buffer size: %d ",
+#else
+           "bitrate max/min/avg: %"PRId64"/%"PRId64"/%"PRId64" buffer size: %d ",
+#endif
            cpb->max_bitrate, cpb->min_bitrate, cpb->avg_bitrate,
-           cpb->buffer_size,
-           cpb->vbv_delay);
+           cpb->buffer_size);
+    if (cpb->vbv_delay == UINT64_MAX)
+        av_log(ctx, AV_LOG_INFO, "vbv_delay: N/A");
+    else
+        av_log(ctx, AV_LOG_INFO, "vbv_delay: %"PRIu64"", cpb->vbv_delay);
 }
 
 static void dump_mastering_display_metadata(void *ctx, AVPacketSideData* sd) {
@@ -358,7 +339,7 @@ static void dump_mastering_display_metadata(void *ctx, AVPacketSideData* sd) {
     av_log(ctx, AV_LOG_INFO, "Mastering Display Metadata, "
            "has_primaries:%d has_luminance:%d "
            "r(%5.4f,%5.4f) g(%5.4f,%5.4f) b(%5.4f %5.4f) wp(%5.4f, %5.4f) "
-           "min_luminance=%f, max_luminance=%f\n",
+           "min_luminance=%f, max_luminance=%f",
            metadata->has_primaries, metadata->has_luminance,
            av_q2d(metadata->display_primaries[0][0]),
            av_q2d(metadata->display_primaries[0][1]),
@@ -368,6 +349,57 @@ static void dump_mastering_display_metadata(void *ctx, AVPacketSideData* sd) {
            av_q2d(metadata->display_primaries[2][1]),
            av_q2d(metadata->white_point[0]), av_q2d(metadata->white_point[1]),
            av_q2d(metadata->min_luminance), av_q2d(metadata->max_luminance));
+}
+
+static void dump_content_light_metadata(void *ctx, AVPacketSideData* sd)
+{
+    AVContentLightMetadata* metadata = (AVContentLightMetadata*)sd->data;
+    av_log(ctx, AV_LOG_INFO, "Content Light Level Metadata, "
+           "MaxCLL=%d, MaxFALL=%d",
+           metadata->MaxCLL, metadata->MaxFALL);
+}
+
+static void dump_spherical(void *ctx, AVCodecParameters *par, AVPacketSideData *sd)
+{
+    AVSphericalMapping *spherical = (AVSphericalMapping *)sd->data;
+    double yaw, pitch, roll;
+
+    if (sd->size < sizeof(*spherical)) {
+        av_log(ctx, AV_LOG_ERROR, "invalid data");
+        return;
+    }
+
+    av_log(ctx, AV_LOG_INFO, "%s ", av_spherical_projection_name(spherical->projection));
+
+    yaw = ((double)spherical->yaw) / (1 << 16);
+    pitch = ((double)spherical->pitch) / (1 << 16);
+    roll = ((double)spherical->roll) / (1 << 16);
+    av_log(ctx, AV_LOG_INFO, "(%f/%f/%f) ", yaw, pitch, roll);
+
+    if (spherical->projection == AV_SPHERICAL_EQUIRECTANGULAR_TILE) {
+        size_t l, t, r, b;
+        av_spherical_tile_bounds(spherical, par->width, par->height,
+                                 &l, &t, &r, &b);
+        av_log(ctx, AV_LOG_INFO,
+               "[%"SIZE_SPECIFIER", %"SIZE_SPECIFIER", %"SIZE_SPECIFIER", %"SIZE_SPECIFIER"] ",
+               l, t, r, b);
+    } else if (spherical->projection == AV_SPHERICAL_CUBEMAP) {
+        av_log(ctx, AV_LOG_INFO, "[pad %"PRIu32"] ", spherical->padding);
+    }
+}
+
+static void dump_dovi_conf(void *ctx, AVPacketSideData* sd)
+{
+    AVDOVIDecoderConfigurationRecord *dovi = (AVDOVIDecoderConfigurationRecord *)sd->data;
+
+    av_log(ctx, AV_LOG_INFO, "version: %d.%d, profile: %d, level: %d, "
+           "rpu flag: %d, el flag: %d, bl flag: %d, compatibility id: %d",
+           dovi->dv_version_major, dovi->dv_version_minor,
+           dovi->dv_profile, dovi->dv_level,
+           dovi->rpu_present_flag,
+           dovi->el_present_flag,
+           dovi->bl_present_flag,
+           dovi->dv_bl_signal_compatibility_id);
 }
 
 static void dump_sidedata(void *ctx, AVStream *st, const char *indent)
@@ -393,7 +425,7 @@ static void dump_sidedata(void *ctx, AVStream *st, const char *indent)
             dump_paramchange(ctx, &sd);
             break;
         case AV_PKT_DATA_H263_MB_INFO:
-            av_log(ctx, AV_LOG_INFO, "h263 macroblock info");
+            av_log(ctx, AV_LOG_INFO, "H.263 macroblock info");
             break;
         case AV_PKT_DATA_REPLAYGAIN:
             av_log(ctx, AV_LOG_INFO, "replaygain: ");
@@ -412,7 +444,8 @@ static void dump_sidedata(void *ctx, AVStream *st, const char *indent)
             dump_audioservicetype(ctx, &sd);
             break;
         case AV_PKT_DATA_QUALITY_STATS:
-            av_log(ctx, AV_LOG_INFO, "quality factor: %d, pict_type: %c", AV_RL32(sd.data), av_get_picture_type_char(sd.data[4]));
+            av_log(ctx, AV_LOG_INFO, "quality factor: %"PRId32", pict_type: %c",
+                   AV_RL32(sd.data), av_get_picture_type_char(sd.data[4]));
             break;
         case AV_PKT_DATA_CPB_PROPERTIES:
             av_log(ctx, AV_LOG_INFO, "cpb: ");
@@ -420,6 +453,20 @@ static void dump_sidedata(void *ctx, AVStream *st, const char *indent)
             break;
         case AV_PKT_DATA_MASTERING_DISPLAY_METADATA:
             dump_mastering_display_metadata(ctx, &sd);
+            break;
+        case AV_PKT_DATA_SPHERICAL:
+            av_log(ctx, AV_LOG_INFO, "spherical: ");
+            dump_spherical(ctx, st->codecpar, &sd);
+            break;
+        case AV_PKT_DATA_CONTENT_LIGHT_LEVEL:
+            dump_content_light_metadata(ctx, &sd);
+            break;
+        case AV_PKT_DATA_ICC_PROFILE:
+            av_log(ctx, AV_LOG_INFO, "ICC Profile");
+            break;
+        case AV_PKT_DATA_DOVI_CONF:
+            av_log(ctx, AV_LOG_INFO, "DOVI configuration record: ");
+            dump_dovi_conf(ctx, &sd);
             break;
         default:
             av_log(ctx, AV_LOG_INFO,
@@ -453,6 +500,8 @@ static void dump_stream_format(AVFormatContext *ic, int i,
         return;
     }
 
+#if FF_API_LAVF_AVCTX
+FF_DISABLE_DEPRECATION_WARNINGS
     // Fields which are missing from AVCodecParameters need to be taken from the AVCodecContext
     avctx->properties = st->codec->properties;
     avctx->codec      = st->codec->codec;
@@ -460,6 +509,8 @@ static void dump_stream_format(AVFormatContext *ic, int i,
     avctx->qmax       = st->codec->qmax;
     avctx->coded_width  = st->codec->coded_width;
     avctx->coded_height = st->codec->coded_height;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
 
     if (separator)
         av_opt_set(avctx, "dump_separator", separator, 0);
@@ -494,7 +545,13 @@ static void dump_stream_format(AVFormatContext *ic, int i,
         int fps = st->avg_frame_rate.den && st->avg_frame_rate.num;
         int tbr = st->r_frame_rate.den && st->r_frame_rate.num;
         int tbn = st->time_base.den && st->time_base.num;
+#if FF_API_LAVF_AVCTX
+FF_DISABLE_DEPRECATION_WARNINGS
         int tbc = st->codec->time_base.den && st->codec->time_base.num;
+FF_ENABLE_DEPRECATION_WARNINGS
+#else
+        int tbc = 0;
+#endif
 
         if (fps || tbr || tbn || tbc)
             av_log(NULL, AV_LOG_INFO, "%s", separator);
@@ -505,8 +562,12 @@ static void dump_stream_format(AVFormatContext *ic, int i,
             print_fps(av_q2d(st->r_frame_rate), tbn || tbc ? "tbr, " : "tbr");
         if (tbn)
             print_fps(1 / av_q2d(st->time_base), tbc ? "tbn, " : "tbn");
+#if FF_API_LAVF_AVCTX
+FF_DISABLE_DEPRECATION_WARNINGS
         if (tbc)
             print_fps(1 / av_q2d(st->codec->time_base), "tbc");
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
     }
 
     if (st->disposition & AV_DISPOSITION_DEFAULT)
@@ -529,6 +590,20 @@ static void dump_stream_format(AVFormatContext *ic, int i,
         av_log(NULL, AV_LOG_INFO, " (visual impaired)");
     if (st->disposition & AV_DISPOSITION_CLEAN_EFFECTS)
         av_log(NULL, AV_LOG_INFO, " (clean effects)");
+    if (st->disposition & AV_DISPOSITION_ATTACHED_PIC)
+        av_log(NULL, AV_LOG_INFO, " (attached pic)");
+    if (st->disposition & AV_DISPOSITION_TIMED_THUMBNAILS)
+        av_log(NULL, AV_LOG_INFO, " (timed thumbnails)");
+    if (st->disposition & AV_DISPOSITION_CAPTIONS)
+        av_log(NULL, AV_LOG_INFO, " (captions)");
+    if (st->disposition & AV_DISPOSITION_DESCRIPTIONS)
+        av_log(NULL, AV_LOG_INFO, " (descriptions)");
+    if (st->disposition & AV_DISPOSITION_METADATA)
+        av_log(NULL, AV_LOG_INFO, " (metadata)");
+    if (st->disposition & AV_DISPOSITION_DEPENDENT)
+        av_log(NULL, AV_LOG_INFO, " (dependent)");
+    if (st->disposition & AV_DISPOSITION_STILL_IMAGE)
+        av_log(NULL, AV_LOG_INFO, " (still image)");
     av_log(NULL, AV_LOG_INFO, "\n");
 
     dump_metadata(NULL, st->metadata, "    ");
@@ -554,7 +629,7 @@ void av_dump_format(AVFormatContext *ic, int index,
     if (!is_output) {
         av_log(NULL, AV_LOG_INFO, "  Duration: ");
         if (ic->duration != AV_NOPTS_VALUE) {
-            int hours, mins, secs, us;
+            int64_t hours, mins, secs, us;
             int64_t duration = ic->duration + (ic->duration <= INT64_MAX - 5000 ? 5000 : 0);
             secs  = duration / AV_TIME_BASE;
             us    = duration % AV_TIME_BASE;
@@ -562,7 +637,7 @@ void av_dump_format(AVFormatContext *ic, int index,
             secs %= 60;
             hours = mins / 60;
             mins %= 60;
-            av_log(NULL, AV_LOG_INFO, "%02d:%02d:%02d.%02d", hours, mins, secs,
+            av_log(NULL, AV_LOG_INFO, "%02"PRId64":%02"PRId64":%02"PRId64".%02"PRId64"", hours, mins, secs,
                    (100 * us) / AV_TIME_BASE);
         } else {
             av_log(NULL, AV_LOG_INFO, "N/A");
@@ -579,7 +654,7 @@ void av_dump_format(AVFormatContext *ic, int index,
         }
         av_log(NULL, AV_LOG_INFO, ", bitrate: ");
         if (ic->bit_rate)
-            av_log(NULL, AV_LOG_INFO, "%"PRId64" kb/s", (int64_t)ic->bit_rate / 1000);
+            av_log(NULL, AV_LOG_INFO, "%"PRId64" kb/s", ic->bit_rate / 1000);
         else
             av_log(NULL, AV_LOG_INFO, "N/A");
         av_log(NULL, AV_LOG_INFO, "\n");

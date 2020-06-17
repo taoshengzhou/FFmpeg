@@ -30,7 +30,7 @@
  * rebuilt frame (not the reference), and since there is no coordinate system
  * they contain exactly as many pixel as the keyframe.
  *
- * Supports: BGRA, BGR24, RGB555
+ * Supports: BGR0, BGR24, RGB555
  */
 
 #include <stdint.h>
@@ -47,7 +47,7 @@
 typedef struct ScreenpressoContext {
     AVFrame *current;
 
-    /* zlib interation */
+    /* zlib interaction */
     uint8_t *inflated_buf;
     uLongf inflated_size;
 } ScreenpressoContext;
@@ -94,8 +94,9 @@ static void sum_delta_flipped(uint8_t       *dst, int dst_linesize,
 {
     int i;
     for (; height > 0; height--) {
+        const uint8_t *src1 = &src[(height - 1) * src_linesize];
         for (i = 0; i < bytewidth; i++)
-            dst[i] += src[(height - 1) * src_linesize + i];
+            dst[i] += src1[i];
         dst += dst_linesize;
     }
 }
@@ -129,7 +130,7 @@ static int screenpresso_decode_frame(AVCodecContext *avctx, void *data,
         avctx->pix_fmt = AV_PIX_FMT_BGR24;
         break;
     case 4:
-        avctx->pix_fmt = AV_PIX_FMT_BGRA;
+        avctx->pix_fmt = AV_PIX_FMT_BGR0;
         break;
     default:
         av_log(avctx, AV_LOG_ERROR, "Invalid bits per pixel value (%d)\n",
@@ -145,7 +146,7 @@ static int screenpresso_decode_frame(AVCodecContext *avctx, void *data,
         return AVERROR_UNKNOWN;
     }
 
-    ret = ff_reget_buffer(avctx, ctx->current);
+    ret = ff_reget_buffer(avctx, ctx->current, 0);
     if (ret < 0)
         return ret;
 
@@ -179,7 +180,7 @@ static int screenpresso_decode_frame(AVCodecContext *avctx, void *data,
     }
     *got_frame = 1;
 
-    return 0;
+    return avpkt->size;
 }
 
 AVCodec ff_screenpresso_decoder = {

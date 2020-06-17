@@ -80,7 +80,7 @@ static av_cold int wma_decode_init(AVCodecContext *avctx)
 
     s->avctx = avctx;
 
-    /* extract flag infos */
+    /* extract flag info */
     flags2    = 0;
     extradata = avctx->extradata;
     if (avctx->codec->id == AV_CODEC_ID_WMAV1 && avctx->extradata_size >= 4)
@@ -349,7 +349,7 @@ static int decode_exp_vlc(WMACodecContext *s, int ch)
             av_log(s->avctx, AV_LOG_ERROR, "Exponent vlc invalid\n");
             return -1;
         }
-        /* NOTE: this offset is the same as MPEG4 AAC ! */
+        /* NOTE: this offset is the same as MPEG-4 AAC! */
         last_exp += code - 60;
         if ((unsigned) last_exp + 60 >= FF_ARRAY_ELEMS(pow_tab)) {
             av_log(s->avctx, AV_LOG_ERROR, "Exponent out of range: %d\n",
@@ -426,7 +426,7 @@ static void wma_window(WMACodecContext *s, float *out)
 
 /**
  * @return 0 if OK. 1 if last block of frame. return -1 if
- * unrecorrable error.
+ * unrecoverable error.
  */
 static int wma_decode_block(WMACodecContext *s)
 {
@@ -585,8 +585,14 @@ static int wma_decode_block(WMACodecContext *s)
                     decode_exp_lsp(s, ch);
                 }
                 s->exponents_bsize[ch] = bsize;
+                s->exponents_initialized[ch] = 1;
             }
         }
+    }
+
+    for (ch = 0; ch < s->avctx->channels; ch++) {
+        if (s->channel_coded[ch] && !s->exponents_initialized[ch])
+            return AVERROR_INVALIDDATA;
     }
 
     /* parse spectral coefficients : just RLE encoding */
@@ -889,11 +895,11 @@ static int wma_decode_superframe(AVCodecContext *avctx, void *data,
             q   = s->last_superframe + s->last_superframe_len;
             len = bit_offset;
             while (len > 7) {
-                *q++ = (get_bits) (&s->gb, 8);
+                *q++ = get_bits(&s->gb, 8);
                 len -= 8;
             }
             if (len > 0)
-                *q++ = (get_bits) (&s->gb, len) << (8 - len);
+                *q++ = get_bits(&s->gb, len) << (8 - len);
             memset(q, 0, AV_INPUT_BUFFER_PADDING_SIZE);
 
             /* XXX: bit_offset bits into last frame */

@@ -31,13 +31,13 @@ typedef struct {
     FFDemuxSubtitlesQueue q;
 } VPlayerContext;
 
-static int vplayer_probe(AVProbeData *p)
+static int vplayer_probe(const AVProbeData *p)
 {
     char c;
     const unsigned char *ptr = p->buf;
 
-    if ((sscanf(ptr, "%*d:%*d:%*d.%*d%c", &c) == 1 ||
-         sscanf(ptr, "%*d:%*d:%*d%c",     &c) == 1) && strchr(": =", c))
+    if ((sscanf(ptr, "%*3d:%*2d:%*2d.%*2d%c", &c) == 1 ||
+         sscanf(ptr, "%*3d:%*2d:%*2d%c",      &c) == 1) && strchr(": =", c))
         return AVPROBE_SCORE_MAX;
     return 0;
 }
@@ -83,8 +83,10 @@ static int vplayer_read_header(AVFormatContext *s)
             AVPacket *sub;
 
             sub = ff_subtitles_queue_insert(&vplayer->q, p, strlen(p), 0);
-            if (!sub)
+            if (!sub) {
+                ff_subtitles_queue_clean(&vplayer->q);
                 return AVERROR(ENOMEM);
+            }
             sub->pos = pos;
             sub->pts = pts_start;
             sub->duration = -1;

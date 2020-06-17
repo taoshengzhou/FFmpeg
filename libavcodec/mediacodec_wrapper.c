@@ -62,7 +62,11 @@ struct JNIAMediaCodecListFields {
     jfieldID avc_profile_high422_id;
     jfieldID avc_profile_high444_id;
 
-} JNIAMediaCodecListFields;
+    jfieldID hevc_profile_main_id;
+    jfieldID hevc_profile_main10_id;
+    jfieldID hevc_profile_main10_hdr10_id;
+
+};
 
 static const struct FFJniField jni_amediacodeclist_mapping[] = {
     { "android/media/MediaCodecList", NULL, NULL, FF_JNI_CLASS, offsetof(struct JNIAMediaCodecListFields, mediacodec_list_class), 1 },
@@ -94,6 +98,10 @@ static const struct FFJniField jni_amediacodeclist_mapping[] = {
         { "android/media/MediaCodecInfo$CodecProfileLevel", "AVCProfileHigh422", "I", FF_JNI_STATIC_FIELD, offsetof(struct JNIAMediaCodecListFields, avc_profile_high422_id), 1 },
         { "android/media/MediaCodecInfo$CodecProfileLevel", "AVCProfileHigh444", "I", FF_JNI_STATIC_FIELD, offsetof(struct JNIAMediaCodecListFields, avc_profile_high444_id), 1 },
 
+        { "android/media/MediaCodecInfo$CodecProfileLevel", "HEVCProfileMain", "I", FF_JNI_STATIC_FIELD, offsetof(struct JNIAMediaCodecListFields, hevc_profile_main_id), 0 },
+        { "android/media/MediaCodecInfo$CodecProfileLevel", "HEVCProfileMain10", "I", FF_JNI_STATIC_FIELD, offsetof(struct JNIAMediaCodecListFields, hevc_profile_main10_id), 0 },
+        { "android/media/MediaCodecInfo$CodecProfileLevel", "HEVCProfileMain10HDR10", "I", FF_JNI_STATIC_FIELD, offsetof(struct JNIAMediaCodecListFields, hevc_profile_main10_hdr10_id), 0 },
+
     { NULL }
 };
 
@@ -102,6 +110,8 @@ struct JNIAMediaFormatFields {
     jclass mediaformat_class;
 
     jmethodID init_id;
+
+    jmethodID contains_key_id;
 
     jmethodID get_integer_id;
     jmethodID get_long_id;
@@ -117,12 +127,14 @@ struct JNIAMediaFormatFields {
 
     jmethodID to_string_id;
 
-} JNIAMediaFormatFields;
+};
 
 static const struct FFJniField jni_amediaformat_mapping[] = {
     { "android/media/MediaFormat", NULL, NULL, FF_JNI_CLASS, offsetof(struct JNIAMediaFormatFields, mediaformat_class), 1 },
 
         { "android/media/MediaFormat", "<init>", "()V", FF_JNI_METHOD, offsetof(struct JNIAMediaFormatFields, init_id), 1 },
+
+        { "android/media/MediaFormat", "containsKey", "(Ljava/lang/String;)Z", FF_JNI_METHOD,offsetof(struct JNIAMediaFormatFields, contains_key_id), 1 },
 
         { "android/media/MediaFormat", "getInteger", "(Ljava/lang/String;)I", FF_JNI_METHOD, offsetof(struct JNIAMediaFormatFields, get_integer_id), 1 },
         { "android/media/MediaFormat", "getLong", "(Ljava/lang/String;)J", FF_JNI_METHOD, offsetof(struct JNIAMediaFormatFields, get_long_id), 1 },
@@ -144,7 +156,7 @@ static const struct FFJniField jni_amediaformat_mapping[] = {
 static const AVClass amediaformat_class = {
     .class_name = "amediaformat",
     .item_name  = av_default_item_name,
-    .version    = LIBAVCODEC_VERSION_INT,
+    .version    = LIBAVUTIL_VERSION_INT,
 };
 
 struct FFAMediaFormat {
@@ -202,7 +214,7 @@ struct JNIAMediaCodecFields {
     jfieldID presentation_time_us_id;
     jfieldID size_id;
 
-} JNIAMediaCodecFields;
+};
 
 static const struct FFJniField jni_amediacodec_mapping[] = {
     { "android/media/MediaCodec", NULL, NULL, FF_JNI_CLASS, offsetof(struct JNIAMediaCodecFields, mediacodec_class), 1 },
@@ -256,7 +268,7 @@ static const struct FFJniField jni_amediacodec_mapping[] = {
 static const AVClass amediacodec_class = {
     .class_name = "amediacodec",
     .item_name  = av_default_item_name,
-    .version    = LIBAVCODEC_VERSION_INT,
+    .version    = LIBAVUTIL_VERSION_INT,
 };
 
 struct FFAMediaCodec {
@@ -266,6 +278,7 @@ struct FFAMediaCodec {
     struct JNIAMediaCodecFields jfields;
 
     jobject object;
+    jobject buffer_info;
 
     jobject input_buffers;
     jobject output_buffers;
@@ -283,44 +296,35 @@ struct FFAMediaCodec {
     int has_get_i_o_buffer;
 };
 
-#define JNI_ATTACH_ENV_OR_RETURN(env, attached, log_ctx, ret) do { \
-    (env) = ff_jni_attach_env(attached, log_ctx);                  \
+#define JNI_GET_ENV_OR_RETURN(env, log_ctx, ret) do {              \
+    (env) = ff_jni_get_env(log_ctx);                               \
     if (!(env)) {                                                  \
         return ret;                                                \
     }                                                              \
 } while (0)
 
-#define JNI_ATTACH_ENV_OR_RETURN_VOID(env, attached, log_ctx) do { \
-    (env) = ff_jni_attach_env(attached, log_ctx);              \
+#define JNI_GET_ENV_OR_RETURN_VOID(env, log_ctx) do {              \
+    (env) = ff_jni_get_env(log_ctx);                               \
     if (!(env)) {                                                  \
         return;                                                    \
     }                                                              \
 } while (0)
 
-#define JNI_DETACH_ENV(attached, log_ctx) do { \
-    if (attached)                              \
-        ff_jni_detach_env(log_ctx);            \
-} while (0)
-
-
-
 int ff_AMediaCodecProfile_getProfileFromAVCodecContext(AVCodecContext *avctx)
 {
     int ret = -1;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     struct JNIAMediaCodecListFields jfields = { 0 };
+    jfieldID field_id = 0;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, avctx, -1);
+    JNI_GET_ENV_OR_RETURN(env, avctx, -1);
 
     if (ff_jni_init_jfields(env, &jfields, jni_amediacodeclist_mapping, 0, avctx) < 0) {
         goto done;
     }
 
     if (avctx->codec_id == AV_CODEC_ID_H264) {
-        jfieldID field_id = 0;
-
         switch(avctx->profile) {
         case FF_PROFILE_H264_BASELINE:
         case FF_PROFILE_H264_CONSTRAINED_BASELINE:
@@ -349,6 +353,17 @@ int ff_AMediaCodecProfile_getProfileFromAVCodecContext(AVCodecContext *avctx)
             field_id = jfields.avc_profile_high444_id;
             break;
         }
+    } else if (avctx->codec_id == AV_CODEC_ID_HEVC) {
+        switch (avctx->profile) {
+        case FF_PROFILE_HEVC_MAIN:
+        case FF_PROFILE_HEVC_MAIN_STILL_PICTURE:
+            field_id = jfields.hevc_profile_main_id;
+            break;
+        case FF_PROFILE_HEVC_MAIN_10:
+            field_id = jfields.hevc_profile_main10_id;
+            break;
+        }
+    }
 
         if (field_id) {
             ret = (*env)->GetStaticIntField(env, jfields.codec_profile_level_class, field_id);
@@ -357,12 +372,9 @@ int ff_AMediaCodecProfile_getProfileFromAVCodecContext(AVCodecContext *avctx)
                 goto done;
             }
         }
-    }
 
 done:
     ff_jni_reset_jfields(env, &jfields, jni_amediacodeclist_mapping, 0, avctx);
-
-    JNI_DETACH_ENV(attached, avctx);
 
     return ret;
 }
@@ -376,13 +388,10 @@ char *ff_AMediaCodecList_getCodecNameByType(const char *mime, int profile, int e
     char *name = NULL;
     char *supported_type = NULL;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     struct JNIAMediaCodecListFields jfields = { 0 };
     struct JNIAMediaFormatFields mediaformat_jfields = { 0 };
 
-    jobject format = NULL;
-    jobject codec = NULL;
     jobject codec_name = NULL;
 
     jobject info = NULL;
@@ -393,7 +402,7 @@ char *ff_AMediaCodecList_getCodecNameByType(const char *mime, int profile, int e
     jobject profile_level = NULL;
     jobjectArray profile_levels = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, log_ctx, NULL);
+    JNI_GET_ENV_OR_RETURN(env, log_ctx, NULL);
 
     if ((ret = ff_jni_init_jfields(env, &jfields, jni_amediacodeclist_mapping, 0, log_ctx)) < 0) {
         goto done;
@@ -458,7 +467,17 @@ char *ff_AMediaCodecList_getCodecNameByType(const char *mime, int profile, int e
                     goto done;
                 }
 
-                if (strstr(name, "OMX.google")) {
+                if (codec_name) {
+                    (*env)->DeleteLocalRef(env, codec_name);
+                    codec_name = NULL;
+                }
+
+                /* Skip software decoders */
+                if (
+                    strstr(name, "OMX.google") ||
+                    strstr(name, "OMX.ffmpeg") ||
+                    (strstr(name, "OMX.SEC") && strstr(name, ".sw.")) ||
+                    !strcmp(name, "OMX.qcom.video.decoder.hevcswvdec")) {
                     av_freep(&name);
                     goto done_with_type;
                 }
@@ -474,6 +493,9 @@ char *ff_AMediaCodecList_getCodecNameByType(const char *mime, int profile, int e
                 }
 
                 profile_count = (*env)->GetArrayLength(env, profile_levels);
+                if (!profile_count) {
+                    found_codec = 1;
+                }
                 for (k = 0; k < profile_count; k++) {
                     int supported_profile = 0;
 
@@ -547,14 +569,6 @@ done_with_info:
     }
 
 done:
-    if (format) {
-        (*env)->DeleteLocalRef(env, format);
-    }
-
-    if (codec) {
-        (*env)->DeleteLocalRef(env, codec);
-    }
-
     if (codec_name) {
         (*env)->DeleteLocalRef(env, codec_name);
     }
@@ -588,8 +602,6 @@ done:
     ff_jni_reset_jfields(env, &jfields, jni_amediacodeclist_mapping, 0, log_ctx);
     ff_jni_reset_jfields(env, &mediaformat_jfields, jni_amediaformat_mapping, 0, log_ctx);
 
-    JNI_DETACH_ENV(attached, log_ctx);
-
     if (!found_codec) {
         av_freep(&name);
     }
@@ -599,9 +611,9 @@ done:
 
 FFAMediaFormat *ff_AMediaFormat_new(void)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     FFAMediaFormat *format = NULL;
+    jobject object = NULL;
 
     format = av_mallocz(sizeof(FFAMediaFormat));
     if (!format) {
@@ -609,7 +621,7 @@ FFAMediaFormat *ff_AMediaFormat_new(void)
     }
     format->class = &amediaformat_class;
 
-    env = ff_jni_attach_env(&attached, format);
+    env = ff_jni_get_env(format);
     if (!env) {
         av_freep(&format);
         return NULL;
@@ -619,32 +631,31 @@ FFAMediaFormat *ff_AMediaFormat_new(void)
         goto fail;
     }
 
-    format->object = (*env)->NewObject(env, format->jfields.mediaformat_class, format->jfields.init_id);
+    object = (*env)->NewObject(env, format->jfields.mediaformat_class, format->jfields.init_id);
+    if (!object) {
+        goto fail;
+    }
+
+    format->object = (*env)->NewGlobalRef(env, object);
     if (!format->object) {
         goto fail;
     }
 
-    format->object = (*env)->NewGlobalRef(env, format->object);
-    if (!format->object) {
-        goto fail;
+fail:
+    if (object) {
+        (*env)->DeleteLocalRef(env, object);
     }
 
-    JNI_DETACH_ENV(attached, format);
+    if (!format->object) {
+        ff_jni_reset_jfields(env, &format->jfields, jni_amediaformat_mapping, 1, format);
+        av_freep(&format);
+    }
 
     return format;
-fail:
-    ff_jni_reset_jfields(env, &format->jfields, jni_amediaformat_mapping, 1, format);
-
-    JNI_DETACH_ENV(attached, format);
-
-    av_freep(&format);
-
-    return NULL;
 }
 
 static FFAMediaFormat *ff_AMediaFormat_newFromObject(void *object)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     FFAMediaFormat *format = NULL;
 
@@ -654,7 +665,7 @@ static FFAMediaFormat *ff_AMediaFormat_newFromObject(void *object)
     }
     format->class = &amediaformat_class;
 
-    env = ff_jni_attach_env(&attached, format);
+    env = ff_jni_get_env(format);
     if (!env) {
         av_freep(&format);
         return NULL;
@@ -669,13 +680,9 @@ static FFAMediaFormat *ff_AMediaFormat_newFromObject(void *object)
         goto fail;
     }
 
-    JNI_DETACH_ENV(attached, format);
-
     return format;
 fail:
     ff_jni_reset_jfields(env, &format->jfields, jni_amediaformat_mapping, 1, format);
-
-    JNI_DETACH_ENV(attached, format);
 
     av_freep(&format);
 
@@ -686,21 +693,18 @@ int ff_AMediaFormat_delete(FFAMediaFormat* format)
 {
     int ret = 0;
 
-    int attached = 0;
     JNIEnv *env = NULL;
 
     if (!format) {
         return 0;
     }
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, format, AVERROR_EXTERNAL);
 
     (*env)->DeleteGlobalRef(env, format->object);
     format->object = NULL;
 
     ff_jni_reset_jfields(env, &format->jfields, jni_amediaformat_mapping, 1, format);
-
-    JNI_DETACH_ENV(attached, format);
 
     av_freep(&format);
 
@@ -711,13 +715,12 @@ char* ff_AMediaFormat_toString(FFAMediaFormat* format)
 {
     char *ret = NULL;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring description = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, NULL);
+    JNI_GET_ENV_OR_RETURN(env, format, NULL);
 
     description = (*env)->CallObjectMethod(env, format->object, format->jfields.to_string_id);
     if (ff_jni_exception_check(env, 1, NULL) < 0) {
@@ -726,12 +729,9 @@ char* ff_AMediaFormat_toString(FFAMediaFormat* format)
 
     ret = ff_jni_jstring_to_utf_chars(env, description, format);
 fail:
-
     if (description) {
         (*env)->DeleteLocalRef(env, description);
     }
-
-    JNI_DETACH_ENV(attached, format);
 
     return ret;
 }
@@ -740,16 +740,22 @@ int ff_AMediaFormat_getInt32(FFAMediaFormat* format, const char *name, int32_t *
 {
     int ret = 1;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
+    jboolean contains_key;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, 0);
+    JNI_GET_ENV_OR_RETURN(env, format, 0);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
+        ret = 0;
+        goto fail;
+    }
+
+    contains_key = (*env)->CallBooleanMethod(env, format->object, format->jfields.contains_key_id, key);
+    if (!contains_key || (ret = ff_jni_exception_check(env, 1, format)) < 0) {
         ret = 0;
         goto fail;
     }
@@ -766,8 +772,6 @@ fail:
         (*env)->DeleteLocalRef(env, key);
     }
 
-    JNI_DETACH_ENV(attached, format);
-
     return ret;
 }
 
@@ -775,16 +779,22 @@ int ff_AMediaFormat_getInt64(FFAMediaFormat* format, const char *name, int64_t *
 {
     int ret = 1;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
+    jboolean contains_key;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, 0);
+    JNI_GET_ENV_OR_RETURN(env, format, 0);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
+        ret = 0;
+        goto fail;
+    }
+
+    contains_key = (*env)->CallBooleanMethod(env, format->object, format->jfields.contains_key_id, key);
+    if (!contains_key || (ret = ff_jni_exception_check(env, 1, format)) < 0) {
         ret = 0;
         goto fail;
     }
@@ -801,8 +811,6 @@ fail:
         (*env)->DeleteLocalRef(env, key);
     }
 
-    JNI_DETACH_ENV(attached, format);
-
     return ret;
 }
 
@@ -810,16 +818,22 @@ int ff_AMediaFormat_getFloat(FFAMediaFormat* format, const char *name, float *ou
 {
     int ret = 1;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
+    jboolean contains_key;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, 0);
+    JNI_GET_ENV_OR_RETURN(env, format, 0);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
+        ret = 0;
+        goto fail;
+    }
+
+    contains_key = (*env)->CallBooleanMethod(env, format->object, format->jfields.contains_key_id, key);
+    if (!contains_key || (ret = ff_jni_exception_check(env, 1, format)) < 0) {
         ret = 0;
         goto fail;
     }
@@ -836,8 +850,6 @@ fail:
         (*env)->DeleteLocalRef(env, key);
     }
 
-    JNI_DETACH_ENV(attached, format);
-
     return ret;
 }
 
@@ -845,17 +857,23 @@ int ff_AMediaFormat_getBuffer(FFAMediaFormat* format, const char *name, void** d
 {
     int ret = 1;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
+    jboolean contains_key;
     jobject result = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, 0);
+    JNI_GET_ENV_OR_RETURN(env, format, 0);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
+        ret = 0;
+        goto fail;
+    }
+
+    contains_key = (*env)->CallBooleanMethod(env, format->object, format->jfields.contains_key_id, key);
+    if (!contains_key || (ret = ff_jni_exception_check(env, 1, format)) < 0) {
         ret = 0;
         goto fail;
     }
@@ -890,8 +908,6 @@ fail:
         (*env)->DeleteLocalRef(env, result);
     }
 
-    JNI_DETACH_ENV(attached, format);
-
     return ret;
 }
 
@@ -899,17 +915,23 @@ int ff_AMediaFormat_getString(FFAMediaFormat* format, const char *name, const ch
 {
     int ret = 1;
 
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
+    jboolean contains_key;
     jstring result = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, format, 0);
+    JNI_GET_ENV_OR_RETURN(env, format, 0);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
+        ret = 0;
+        goto fail;
+    }
+
+    contains_key = (*env)->CallBooleanMethod(env, format->object, format->jfields.contains_key_id, key);
+    if (!contains_key || (ret = ff_jni_exception_check(env, 1, format)) < 0) {
         ret = 0;
         goto fail;
     }
@@ -936,20 +958,17 @@ fail:
         (*env)->DeleteLocalRef(env, result);
     }
 
-    JNI_DETACH_ENV(attached, format);
-
     return ret;
 }
 
 void ff_AMediaFormat_setInt32(FFAMediaFormat* format, const char* name, int32_t value)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN_VOID(env, &attached, format);
+    JNI_GET_ENV_OR_RETURN_VOID(env, format);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
@@ -965,19 +984,16 @@ fail:
     if (key) {
         (*env)->DeleteLocalRef(env, key);
     }
-
-    JNI_DETACH_ENV(attached, format);
 }
 
 void ff_AMediaFormat_setInt64(FFAMediaFormat* format, const char* name, int64_t value)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN_VOID(env, &attached, format);
+    JNI_GET_ENV_OR_RETURN_VOID(env, format);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
@@ -993,19 +1009,16 @@ fail:
     if (key) {
         (*env)->DeleteLocalRef(env, key);
     }
-
-    JNI_DETACH_ENV(attached, NULL);
 }
 
 void ff_AMediaFormat_setFloat(FFAMediaFormat* format, const char* name, float value)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN_VOID(env, &attached, format);
+    JNI_GET_ENV_OR_RETURN_VOID(env, format);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
@@ -1021,20 +1034,17 @@ fail:
     if (key) {
         (*env)->DeleteLocalRef(env, key);
     }
-
-    JNI_DETACH_ENV(attached, NULL);
 }
 
 void ff_AMediaFormat_setString(FFAMediaFormat* format, const char* name, const char* value)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
     jstring string = NULL;
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN_VOID(env, &attached, format);
+    JNI_GET_ENV_OR_RETURN_VOID(env, format);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
@@ -1059,13 +1069,10 @@ fail:
     if (string) {
         (*env)->DeleteLocalRef(env, string);
     }
-
-    JNI_DETACH_ENV(attached, format);
 }
 
 void ff_AMediaFormat_setBuffer(FFAMediaFormat* format, const char* name, void* data, size_t size)
 {
-    int attached = 0;
     JNIEnv *env = NULL;
     jstring key = NULL;
     jobject buffer = NULL;
@@ -1073,7 +1080,7 @@ void ff_AMediaFormat_setBuffer(FFAMediaFormat* format, const char* name, void* d
 
     av_assert0(format != NULL);
 
-    JNI_ATTACH_ENV_OR_RETURN_VOID(env, &attached, format);
+    JNI_GET_ENV_OR_RETURN_VOID(env, format);
 
     key = ff_jni_utf_chars_to_jstring(env, name, format);
     if (!key) {
@@ -1109,17 +1116,14 @@ fail:
     if (buffer) {
         (*env)->DeleteLocalRef(env, buffer);
     }
-
-    JNI_DETACH_ENV(attached, format);
 }
 
 static int codec_init_static_fields(FFAMediaCodec *codec)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
     codec->INFO_TRY_AGAIN_LATER = (*env)->GetStaticIntField(env, codec->jfields.mediacodec_class, codec->jfields.info_try_again_later_id);
     if ((ret = ff_jni_exception_check(env, 1, codec)) < 0) {
@@ -1164,17 +1168,23 @@ static int codec_init_static_fields(FFAMediaCodec *codec)
     }
 
 fail:
-    JNI_DETACH_ENV(attached, NULL);
 
     return ret;
 }
 
-FFAMediaCodec* ff_AMediaCodec_createCodecByName(const char *name)
+#define CREATE_CODEC_BY_NAME   0
+#define CREATE_DECODER_BY_TYPE 1
+#define CREATE_ENCODER_BY_TYPE 2
+
+static inline FFAMediaCodec *codec_create(int method, const char *arg)
 {
-    int attached = 0;
+    int ret = -1;
     JNIEnv *env = NULL;
     FFAMediaCodec *codec = NULL;
-    jstring codec_name = NULL;
+    jstring jarg = NULL;
+    jobject object = NULL;
+    jobject buffer_info = NULL;
+    jmethodID create_id = NULL;
 
     codec = av_mallocz(sizeof(FFAMediaCodec));
     if (!codec) {
@@ -1182,7 +1192,7 @@ FFAMediaCodec* ff_AMediaCodec_createCodecByName(const char *name)
     }
     codec->class = &amediacodec_class;
 
-    env = ff_jni_attach_env(&attached, codec);
+    env = ff_jni_get_env(codec);
     if (!env) {
         av_freep(&codec);
         return NULL;
@@ -1192,17 +1202,28 @@ FFAMediaCodec* ff_AMediaCodec_createCodecByName(const char *name)
         goto fail;
     }
 
-    codec_name = ff_jni_utf_chars_to_jstring(env, name, codec);
-    if (!codec_name) {
+    jarg = ff_jni_utf_chars_to_jstring(env, arg, codec);
+    if (!jarg) {
         goto fail;
     }
 
-    codec->object = (*env)->CallStaticObjectMethod(env, codec->jfields.mediacodec_class, codec->jfields.create_by_codec_name_id, codec_name);
+    switch (method) {
+    case CREATE_CODEC_BY_NAME:   create_id = codec->jfields.create_by_codec_name_id;   break;
+    case CREATE_DECODER_BY_TYPE: create_id = codec->jfields.create_decoder_by_type_id; break;
+    case CREATE_ENCODER_BY_TYPE: create_id = codec->jfields.create_encoder_by_type_id; break;
+    default:
+        av_assert0(0);
+    }
+
+    object = (*env)->CallStaticObjectMethod(env,
+                                            codec->jfields.mediacodec_class,
+                                            create_id,
+                                            jarg);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
         goto fail;
     }
 
-    codec->object = (*env)->NewGlobalRef(env, codec->object);
+    codec->object = (*env)->NewGlobalRef(env, object);
     if (!codec->object) {
         goto fail;
     }
@@ -1215,173 +1236,86 @@ FFAMediaCodec* ff_AMediaCodec_createCodecByName(const char *name)
         codec->has_get_i_o_buffer = 1;
     }
 
-    JNI_DETACH_ENV(attached, codec);
-
-    return codec;
-fail:
-    ff_jni_reset_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec);
-
-    if (codec_name) {
-        (*env)->DeleteLocalRef(env, codec_name);
-    }
-
-    JNI_DETACH_ENV(attached, codec);
-
-    av_freep(&codec);
-
-    return NULL;
-}
-
-FFAMediaCodec* ff_AMediaCodec_createDecoderByType(const char *mime)
-{
-    int attached = 0;
-    JNIEnv *env = NULL;
-    FFAMediaCodec *codec = NULL;
-    jstring mime_type = NULL;
-
-    codec = av_mallocz(sizeof(FFAMediaCodec));
-    if (!codec) {
-        return NULL;
-    }
-    codec->class = &amediacodec_class;
-
-    env = ff_jni_attach_env(&attached, codec);
-    if (!env) {
-        av_freep(&codec);
-        return NULL;
-    }
-
-    if (ff_jni_init_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec) < 0) {
-        goto fail;
-    }
-
-    mime_type = ff_jni_utf_chars_to_jstring(env, mime, codec);
-    if (!mime_type) {
-        goto fail;
-    }
-
-    codec->object = (*env)->CallStaticObjectMethod(env, codec->jfields.mediacodec_class, codec->jfields.create_decoder_by_type_id, mime_type);
+    buffer_info = (*env)->NewObject(env, codec->jfields.mediainfo_class, codec->jfields.init_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
         goto fail;
     }
 
-    codec->object = (*env)->NewGlobalRef(env, codec->object);
-    if (!codec->object) {
+    codec->buffer_info = (*env)->NewGlobalRef(env, buffer_info);
+    if (!codec->buffer_info) {
         goto fail;
     }
 
-    if (codec_init_static_fields(codec) < 0) {
-        goto fail;
-    }
-
-    if (codec->jfields.get_input_buffer_id && codec->jfields.get_output_buffer_id) {
-        codec->has_get_i_o_buffer = 1;
-    }
-
-    JNI_DETACH_ENV(attached, codec);
-
-    return codec;
+    ret = 0;
 fail:
-    ff_jni_reset_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec);
-
-    if (mime_type) {
-        (*env)->DeleteLocalRef(env, mime_type);
+    if (jarg) {
+        (*env)->DeleteLocalRef(env, jarg);
     }
 
-    JNI_DETACH_ENV(attached, codec);
-
-    av_freep(&codec);
-
-    return NULL;
-}
-
-FFAMediaCodec* ff_AMediaCodec_createEncoderByType(const char *mime)
-{
-    int attached = 0;
-    JNIEnv *env = NULL;
-    FFAMediaCodec *codec = NULL;
-    jstring mime_type = NULL;
-
-    codec = av_mallocz(sizeof(FFAMediaCodec));
-    if (!codec) {
-        return NULL;
+    if (object) {
+        (*env)->DeleteLocalRef(env, object);
     }
-    codec->class = &amediacodec_class;
 
-    env = ff_jni_attach_env(&attached, codec);
-    if (!env) {
+    if (buffer_info) {
+        (*env)->DeleteLocalRef(env, buffer_info);
+    }
+
+    if (ret < 0) {
+        if (codec->object) {
+            (*env)->DeleteGlobalRef(env, codec->object);
+        }
+
+        if (codec->buffer_info) {
+            (*env)->DeleteGlobalRef(env, codec->buffer_info);
+        }
+
+        ff_jni_reset_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec);
         av_freep(&codec);
-        return NULL;
     }
-
-    if (ff_jni_init_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec) < 0) {
-        goto fail;
-    }
-
-    mime_type = ff_jni_utf_chars_to_jstring(env, mime, codec);
-    if (!mime_type) {
-        goto fail;
-    }
-
-    codec->object = (*env)->CallStaticObjectMethod(env, codec->jfields.mediacodec_class, codec->jfields.create_encoder_by_type_id, mime_type);
-    if (ff_jni_exception_check(env, 1, codec) < 0) {
-        goto fail;
-    }
-
-    codec->object = (*env)->NewGlobalRef(env, codec->object);
-    if (!codec->object) {
-        goto fail;
-    }
-
-    if (codec_init_static_fields(codec) < 0) {
-        goto fail;
-    }
-
-    if (codec->jfields.get_input_buffer_id && codec->jfields.get_output_buffer_id) {
-        codec->has_get_i_o_buffer = 1;
-    }
-
-    JNI_DETACH_ENV(attached, NULL);
 
     return codec;
-fail:
-    ff_jni_reset_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec);
-
-    if (mime_type) {
-        (*env)->DeleteLocalRef(env, mime_type);
-    }
-
-    JNI_DETACH_ENV(attached, codec);
-
-    av_freep(&codec);
-
-    return NULL;
 }
+
+#define DECLARE_FF_AMEDIACODEC_CREATE_FUNC(name, method) \
+FFAMediaCodec *ff_AMediaCodec_##name(const char *arg)    \
+{                                                        \
+    return codec_create(method, arg);                    \
+}                                                        \
+
+DECLARE_FF_AMEDIACODEC_CREATE_FUNC(createCodecByName,   CREATE_CODEC_BY_NAME)
+DECLARE_FF_AMEDIACODEC_CREATE_FUNC(createDecoderByType, CREATE_DECODER_BY_TYPE)
+DECLARE_FF_AMEDIACODEC_CREATE_FUNC(createEncoderByType, CREATE_ENCODER_BY_TYPE)
 
 int ff_AMediaCodec_delete(FFAMediaCodec* codec)
 {
     int ret = 0;
 
-    int attached = 0;
     JNIEnv *env = NULL;
 
     if (!codec) {
         return 0;
     }
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
     (*env)->CallVoidMethod(env, codec->object, codec->jfields.release_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
         ret = AVERROR_EXTERNAL;
     }
 
+    (*env)->DeleteGlobalRef(env, codec->input_buffers);
+    codec->input_buffers = NULL;
+
+    (*env)->DeleteGlobalRef(env, codec->output_buffers);
+    codec->output_buffers = NULL;
+
     (*env)->DeleteGlobalRef(env, codec->object);
     codec->object = NULL;
 
-    ff_jni_reset_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec);
+    (*env)->DeleteGlobalRef(env, codec->buffer_info);
+    codec->buffer_info = NULL;
 
-    JNI_DETACH_ENV(attached, codec);
+    ff_jni_reset_jfields(env, &codec->jfields, jni_amediacodec_mapping, 1, codec);
 
     av_freep(&codec);
 
@@ -1391,11 +1325,10 @@ int ff_AMediaCodec_delete(FFAMediaCodec* codec)
 char *ff_AMediaCodec_getName(FFAMediaCodec *codec)
 {
     char *ret = NULL;
-    int attached = 0;
     JNIEnv *env = NULL;
     jobject *name = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, NULL);
+    JNI_GET_ENV_OR_RETURN(env, codec, NULL);
 
     name = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_name_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
@@ -1405,7 +1338,9 @@ char *ff_AMediaCodec_getName(FFAMediaCodec *codec)
     ret = ff_jni_jstring_to_utf_chars(env, name, codec);
 
 fail:
-    JNI_DETACH_ENV(attached, NULL);
+    if (name) {
+        (*env)->DeleteLocalRef(env, name);
+    }
 
     return ret;
 }
@@ -1413,33 +1348,26 @@ fail:
 int ff_AMediaCodec_configure(FFAMediaCodec* codec, const FFAMediaFormat* format, void* surface, void *crypto, uint32_t flags)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    /* TODO: implement surface handling */
-    av_assert0(surface == NULL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
-
-    (*env)->CallVoidMethod(env, codec->object, codec->jfields.configure_id, format->object, NULL, NULL, flags);
+    (*env)->CallVoidMethod(env, codec->object, codec->jfields.configure_id, format->object, surface, NULL, flags);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
         ret = AVERROR_EXTERNAL;
         goto fail;
     }
 
 fail:
-    JNI_DETACH_ENV(attached, NULL);
-
     return ret;
 }
 
 int ff_AMediaCodec_start(FFAMediaCodec* codec)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
     (*env)->CallVoidMethod(env, codec->object, codec->jfields.start_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
@@ -1448,18 +1376,15 @@ int ff_AMediaCodec_start(FFAMediaCodec* codec)
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 int ff_AMediaCodec_stop(FFAMediaCodec* codec)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
     (*env)->CallVoidMethod(env, codec->object, codec->jfields.stop_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
@@ -1468,18 +1393,15 @@ int ff_AMediaCodec_stop(FFAMediaCodec* codec)
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 int ff_AMediaCodec_flush(FFAMediaCodec* codec)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
     (*env)->CallVoidMethod(env, codec->object, codec->jfields.flush_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
@@ -1488,58 +1410,49 @@ int ff_AMediaCodec_flush(FFAMediaCodec* codec)
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 int ff_AMediaCodec_releaseOutputBuffer(FFAMediaCodec* codec, size_t idx, int render)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
-    (*env)->CallVoidMethod(env, codec->object, codec->jfields.release_output_buffer_id, idx, render);
+    (*env)->CallVoidMethod(env, codec->object, codec->jfields.release_output_buffer_id, (jint)idx, (jboolean)render);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
         ret = AVERROR_EXTERNAL;
         goto fail;
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 int ff_AMediaCodec_releaseOutputBufferAtTime(FFAMediaCodec *codec, size_t idx, int64_t timestampNs)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
-    (*env)->CallVoidMethod(env, codec->object, codec->jfields.release_output_buffer_at_time_id, idx, timestampNs);
+    (*env)->CallVoidMethod(env, codec->object, codec->jfields.release_output_buffer_at_time_id, (jint)idx, (jlong)timestampNs);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
         ret = AVERROR_EXTERNAL;
         goto fail;
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 ssize_t ff_AMediaCodec_dequeueInputBuffer(FFAMediaCodec* codec, int64_t timeoutUs)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
     ret = (*env)->CallIntMethod(env, codec->object, codec->jfields.dequeue_input_buffer_id, timeoutUs);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
@@ -1548,82 +1461,57 @@ ssize_t ff_AMediaCodec_dequeueInputBuffer(FFAMediaCodec* codec, int64_t timeoutU
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 int ff_AMediaCodec_queueInputBuffer(FFAMediaCodec* codec, size_t idx, off_t offset, size_t size, uint64_t time, uint32_t flags)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
-    (*env)->CallVoidMethod(env, codec->object, codec->jfields.queue_input_buffer_id, idx, offset, size, time, flags);
+    (*env)->CallVoidMethod(env, codec->object, codec->jfields.queue_input_buffer_id, (jint)idx, (jint)offset, (jint)size, time, flags);
     if ((ret = ff_jni_exception_check(env, 1, codec)) < 0) {
         ret = AVERROR_EXTERNAL;
         goto fail;
     }
 
 fail:
-    JNI_DETACH_ENV(attached, codec);
-
     return ret;
 }
 
 ssize_t ff_AMediaCodec_dequeueOutputBuffer(FFAMediaCodec* codec, FFAMediaCodecBufferInfo *info, int64_t timeoutUs)
 {
     int ret = 0;
-    int attached = 0;
     JNIEnv *env = NULL;
 
-    jobject mediainfo = NULL;
+    JNI_GET_ENV_OR_RETURN(env, codec, AVERROR_EXTERNAL);
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, AVERROR_EXTERNAL);
-
-    mediainfo = (*env)->NewObject(env, codec->jfields.mediainfo_class, codec->jfields.init_id);
+    ret = (*env)->CallIntMethod(env, codec->object, codec->jfields.dequeue_output_buffer_id, codec->buffer_info, timeoutUs);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
-        ret = AVERROR_EXTERNAL;
-        goto fail;
+        return AVERROR_EXTERNAL;
     }
 
-    ret = (*env)->CallIntMethod(env, codec->object, codec->jfields.dequeue_output_buffer_id, mediainfo, timeoutUs);
+    info->flags = (*env)->GetIntField(env, codec->buffer_info, codec->jfields.flags_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
-        ret = AVERROR_EXTERNAL;
-        goto fail;
+        return AVERROR_EXTERNAL;
     }
 
-    info->flags = (*env)->GetIntField(env, mediainfo, codec->jfields.flags_id);
+    info->offset = (*env)->GetIntField(env, codec->buffer_info, codec->jfields.offset_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
-        ret = AVERROR_EXTERNAL;
-        goto fail;
+        return AVERROR_EXTERNAL;
     }
 
-    info->offset = (*env)->GetIntField(env, mediainfo, codec->jfields.offset_id);
+    info->presentationTimeUs = (*env)->GetLongField(env, codec->buffer_info, codec->jfields.presentation_time_us_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
-        ret = AVERROR_EXTERNAL;
-        goto fail;
+        return AVERROR_EXTERNAL;
     }
 
-    info->presentationTimeUs = (*env)->GetLongField(env, mediainfo, codec->jfields.presentation_time_us_id);
+    info->size = (*env)->GetIntField(env, codec->buffer_info, codec->jfields.size_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
-        ret = AVERROR_EXTERNAL;
-        goto fail;
+        return AVERROR_EXTERNAL;
     }
-
-    info->size = (*env)->GetIntField(env, mediainfo, codec->jfields.size_id);
-    if (ff_jni_exception_check(env, 1, codec) < 0) {
-        ret = AVERROR_EXTERNAL;
-        goto fail;
-    }
-fail:
-    if (mediainfo) {
-        (*env)->DeleteLocalRef(env, mediainfo);
-    }
-
-    JNI_DETACH_ENV(attached, NULL);
 
     return ret;
 }
@@ -1631,26 +1519,26 @@ fail:
 uint8_t* ff_AMediaCodec_getInputBuffer(FFAMediaCodec* codec, size_t idx, size_t *out_size)
 {
     uint8_t *ret = NULL;
-    int attached = 0;
     JNIEnv *env = NULL;
 
     jobject buffer = NULL;
+    jobject input_buffers = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, NULL);
+    JNI_GET_ENV_OR_RETURN(env, codec, NULL);
 
     if (codec->has_get_i_o_buffer) {
-        buffer = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_input_buffer_id, idx);
+        buffer = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_input_buffer_id, (jint)idx);
         if (ff_jni_exception_check(env, 1, codec) < 0) {
             goto fail;
         }
     } else {
         if (!codec->input_buffers) {
-            codec->input_buffers = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_input_buffers_id);
+            input_buffers = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_input_buffers_id);
             if (ff_jni_exception_check(env, 1, codec) < 0) {
                 goto fail;
             }
 
-            codec->input_buffers = (*env)->NewGlobalRef(env, codec->input_buffers);
+            codec->input_buffers = (*env)->NewGlobalRef(env, input_buffers);
             if (ff_jni_exception_check(env, 1, codec) < 0) {
                 goto fail;
             }
@@ -1669,7 +1557,9 @@ fail:
         (*env)->DeleteLocalRef(env, buffer);
     }
 
-    JNI_DETACH_ENV(attached, codec);
+    if (input_buffers) {
+        (*env)->DeleteLocalRef(env, input_buffers);
+    }
 
     return ret;
 }
@@ -1677,26 +1567,26 @@ fail:
 uint8_t* ff_AMediaCodec_getOutputBuffer(FFAMediaCodec* codec, size_t idx, size_t *out_size)
 {
     uint8_t *ret = NULL;
-    int attached = 0;
     JNIEnv *env = NULL;
 
     jobject buffer = NULL;
+    jobject output_buffers = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, NULL);
+    JNI_GET_ENV_OR_RETURN(env, codec, NULL);
 
     if (codec->has_get_i_o_buffer) {
-        buffer = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_output_buffer_id, idx);
+        buffer = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_output_buffer_id, (jint)idx);
         if (ff_jni_exception_check(env, 1, codec) < 0) {
             goto fail;
         }
     } else {
         if (!codec->output_buffers) {
-            codec->output_buffers = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_output_buffers_id);
+            output_buffers = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_output_buffers_id);
             if (ff_jni_exception_check(env, 1, codec) < 0) {
                 goto fail;
             }
 
-            codec->output_buffers = (*env)->NewGlobalRef(env, codec->output_buffers);
+            codec->output_buffers = (*env)->NewGlobalRef(env, output_buffers);
             if (ff_jni_exception_check(env, 1, codec) < 0) {
                 goto fail;
             }
@@ -1715,7 +1605,9 @@ fail:
         (*env)->DeleteLocalRef(env, buffer);
     }
 
-    JNI_DETACH_ENV(attached, codec);
+    if (output_buffers) {
+        (*env)->DeleteLocalRef(env, output_buffers);
+    }
 
     return ret;
 }
@@ -1723,12 +1615,11 @@ fail:
 FFAMediaFormat* ff_AMediaCodec_getOutputFormat(FFAMediaCodec* codec)
 {
     FFAMediaFormat *ret = NULL;
-    int attached = 0;
     JNIEnv *env = NULL;
 
     jobject mediaformat = NULL;
 
-    JNI_ATTACH_ENV_OR_RETURN(env, &attached, codec, NULL);
+    JNI_GET_ENV_OR_RETURN(env, codec, NULL);
 
     mediaformat = (*env)->CallObjectMethod(env, codec->object, codec->jfields.get_output_format_id);
     if (ff_jni_exception_check(env, 1, codec) < 0) {
@@ -1740,8 +1631,6 @@ fail:
     if (mediaformat) {
         (*env)->DeleteLocalRef(env, mediaformat);
     }
-
-    JNI_DETACH_ENV(attached, codec);
 
     return ret;
 }
@@ -1787,10 +1676,9 @@ int ff_AMediaCodec_cleanOutputBuffers(FFAMediaCodec *codec)
 
     if (!codec->has_get_i_o_buffer) {
         if (codec->output_buffers) {
-            int attached = 0;
             JNIEnv *env = NULL;
 
-            env = ff_jni_attach_env(&attached, codec);
+            env = ff_jni_get_env(codec);
             if (!env) {
                 ret = AVERROR_EXTERNAL;
                 goto fail;
@@ -1798,11 +1686,24 @@ int ff_AMediaCodec_cleanOutputBuffers(FFAMediaCodec *codec)
 
             (*env)->DeleteGlobalRef(env, codec->output_buffers);
             codec->output_buffers = NULL;
-
-            JNI_DETACH_ENV(attached, codec);
         }
     }
 
 fail:
+    return ret;
+}
+
+int ff_Build_SDK_INT(AVCodecContext *avctx)
+{
+    int ret = -1;
+    JNIEnv *env = NULL;
+    jclass versionClass;
+    jfieldID sdkIntFieldID;
+    JNI_GET_ENV_OR_RETURN(env, avctx, -1);
+
+    versionClass = (*env)->FindClass(env, "android/os/Build$VERSION");
+    sdkIntFieldID = (*env)->GetStaticFieldID(env, versionClass, "SDK_INT", "I");
+    ret = (*env)->GetStaticIntField(env, versionClass, sdkIntFieldID);
+    (*env)->DeleteLocalRef(env, versionClass);
     return ret;
 }
